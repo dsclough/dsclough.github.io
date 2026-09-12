@@ -1,0 +1,290 @@
+/* Personal site — single stylesheet, no build step.
+   Palette: warm paper neutrals + one accent (rust) reserved for interaction. */
+
+:root {
+  --bg: #fcfbf8;
+  --surface: #ffffff;
+  --ink: #16181d;
+  --muted: #6b7280;
+  --line: rgba(22, 24, 29, 0.1);
+  --accent: #b4451f;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(16, 18, 22, 0.04), 0 6px 16px rgba(16, 18, 22, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --surface: #1c1f24;
+    --ink: #ededef;
+    --muted: #9aa1ac;
+    --line: rgba(237, 237, 239, 0.14);
+    --accent: #e07a4f;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.24), 0 6px 16px rgba(0, 0, 0, 0.28);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 64px 24px 96px;
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Hero ------------------------------------------------------------------ */
+
+.hero {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  padding-bottom: 48px;
+  border-bottom: 1px solid var(--line);
+}
+
+.avatar {
+  flex: none;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: grid;
+  place-items: center;
+  font-family: var(--serif);
+  font-size: 32px;
+  color: var(--muted);
+  overflow: hidden;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.role {
+  margin: 8px 0 0;
+  font-size: 17px;
+  color: var(--muted);
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 16px 0 0;
+  font-size: 15px;
+}
+
+/* Sections -------------------------------------------------------------- */
+
+section {
+  padding-top: 48px;
+}
+
+h2 {
+  margin: 0 0 24px;
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.note {
+  margin: -8px 0 24px;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+/* Game cards ------------------------------------------------------------ */
+
+.grid {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.card:hover {
+  color: inherit;
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+
+.card-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  object-position: center;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.card-body {
+  padding: 16px;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.card-blurb {
+  margin: 4px 0 0;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.card-meta {
+  margin: 12px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Stuff list ------------------------------------------------------------ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.list li {
+  display: grid;
+  gap: 4px;
+}
+
+.list-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.list-blurb {
+  font-size: 15px;
+  color: var(--muted);
+}
+
+/* Footer ---------------------------------------------------------------- */
+
+.site-foot {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-content: space-between;
+}
+
+/* Motion & small screens ------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+
+  .card:hover {
+    transform: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .wrap {
+    padding: 40px 20px 64px;
+  }
+
+  .hero {
+    gap: 16px;
+    padding-bottom: 32px;
+  }
+
+  .avatar {
+    width: 72px;
+    height: 72px;
+    font-size: 24px;
+  }
+
+  h1 {
+    font-size: 30px;
+  }
+
+  .role {
+    font-size: 16px;
+  }
+
+  section {
+    padding-top: 40px;
+  }
+}
