@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Bait traffic into chain-reaction crashes and hop to safety in Crossing Carnage, a pixel-art highway game.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2316181D'/><text x='32' y='44' font-family='Georgia,serif' font-size='36' fill='%23FCFBF8' text-anchor='middle'>D</text></svg>">
+  <title>Crossing Carnage &middot; David Clough</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #FCFBF8;
+      --surface: #FFFFFF;
+      --ink: #16181D;
+      --muted: #6B7280;
+      --line: rgba(22,24,29,0.10);
+      --accent: #B4451F;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14161A;
+        --surface: #1C1F24;
+        --ink: #EDEDEF;
+        --muted: #9AA1AC;
+        --line: rgba(237,237,239,0.14);
+        --accent: #E07A4F;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 24px; }
+    .top { display: flex; flex-direction: column; align-items: flex-start; gap: 24px; }
+    .back { color: var(--muted); text-decoration: none; }
+    .back:hover { color: var(--accent); }
+    h1 { margin: 0; font: 400 40px/1.1 Georgia, 'Iowan Old Style', 'Times New Roman', serif; }
+    .hint { margin: 16px 0 24px; color: var(--muted); font-size: 14px; }
+    .stage { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    canvas { display: block; width: 100%; max-width: 100%; aspect-ratio: 4 / 3; margin: auto; touch-action: none; image-rendering: pixelated; }
+    canvas:focus-visible { outline-offset: -4px; }
+    .hud { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+    .stats { display: flex; gap: 24px; min-width: 0; }
+    .stat { color: var(--muted); font-size: 12px; min-width: 0; }
+    .stat output { display: block; color: var(--ink); font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 8px; }
+    button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { color: var(--muted); cursor: default; opacity: 0.6; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+    @media (max-width: 480px) {
+      .stats { width: 100%; justify-content: space-between; gap: 8px; }
+      .actions { width: 100%; }
+      button { flex: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="top"><a class="back" href="../../index.html">&#8592; All games</a><h1>Crossing Carnage</h1></header>
+    <p class="hint">Hop: arrows / WASD / swipe / tap. Bait cars into crashes. Fill five homes. Start / pause: Space or Enter.</p>
+    <div class="stage"><canvas id="game" tabindex="0" aria-label="Crossing Carnage. Frog column 10 verge. Score 0. Lives 3. Level 1. Multiplier x1. Pads 0 of 5. waiting.">Crossing Carnage requires a browser with canvas support.</canvas></div>
+    <div class="hud">
+      <div class="stats" aria-label="Game statistics">
+        <div class="stat">Score<output id="score">0</output></div>
+        <div class="stat">High<output id="best">0</output></div>
+        <div class="stat">Lives<output id="lives">3</output></div>
+        <div class="stat">Level<output id="level">1</output></div>
+      </div>
+      <div class="actions"><button id="pause" type="button" disabled>Pause</button><button id="restart" type="button">New game</button></div>
+    </div>
+    <span class="sr-only" role="status" aria-live="polite" id="announcement"></span>
+  </main>
+  <script>
+    (() => {
+      'use strict';
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const pauseButton = document.getElementById('pause');
+      const announcement = document.getElementById('announcement');
+      const outputs = Object.fromEntries(['score', 'best', 'lives', 'level'].map(id => [id, document.getElementById(id)]));
+      const motion = matchMedia('(prefers-reduced-motion: reduce)');
+      const theme = matchMedia('(prefers-color-scheme: dark)');
+      const W = 320, H = 240, HOP = 0.18;
+      const palette = ['#0A0A12', '#34364A', '#4A4D63', '#8A8FA0', '#E8E8E0', '#A23363', '#F37D26', '#F5C628', '#6B8C2E', '#3E5A24', '#64D541', '#3CB52A', '#BC3D4B', '#73CCD0', '#E5844E', '#838486'];
+      const scene = document.createElement('canvas');
+      scene.width = W; scene.height = H;
+      const g = scene.getContext('2d');
+      g.imageSmoothingEnabled = false;
+      // Side profiles follow the reference sheet: outlined tyres, split windows,
+      // bright roof seams and shaded sills. All maps face right before mirroring.
+      const maps = {
+        sports: [
+          '................................',
+          '................................',
+          '..........000000000.............',
+          '..000....0EEEEEEEECC0...........',
+          '..0C00000C00000000CC000.........',
+          '...0CCCCCC0DD0DDD00CCCCC000.....',
+          '..0CCCCCCC0D00DDDD0CCCCCCC00....',
+          '.0CEEEEECC000000000CCEEEECC70...',
+          '.0CCCCCCCCCCCCCCCCCCCCCCCCC470..',
+          '.0CCCC0000CCCCCCCCCCCC0000CC770.',
+          '.0CCC000000CCCCCCCCCC000000CC0..',
+          '.03CC003300CCCCCCCCCC003300C30..',
+          '..0000344300000000000034430000..',
+          '......0330............0330......',
+          '......0000............0000......',
+          '................................'
+        ],
+        taxi: [
+          '...............00...............',
+          '..............0770..............',
+          '.........00000000000............',
+          '........0744444444770...........',
+          '.......070DDD00DDD0770..........',
+          '......070DDDD00DDDD077000.......',
+          '..0000770DDDD00DDDDD07777700....',
+          '.0744477000000000000074444770...',
+          '.07707070707070707070707077770..',
+          '.07777000077777777777700007770..',
+          '.077700000077777777770000007470.',
+          '.037700330077777777770033007030.',
+          '..0000344300000000000034430000..',
+          '......0330............0330......',
+          '......0000............0000......',
+          '................................'
+        ],
+        sedan: [
+          '................................',
+          '................................',
+          '.........00000000000............',
+          '........0D44444444DD0...........',
+          '.......0D0DDD00DDD0DD0..........',
+          '......0D0DDDD00DDDD0DD000.......',
+          '..0000DD0DDDD00DDDDD0DDDD00.....',
+          '.0D444DD0000000000000D444DD0....',
+          '.0DDDDDDDD0DDDD0DDDDDDDDDDD70...',
+          '.0DDDD0000DDDDD0DDDDDD0000D470..',
+          '.0DDD000000DDDD0DDDDD000000D70..',
+          '.03DD003300DDDD0DDDDD003300D30..',
+          '..0000344300000000000034430000..',
+          '......0330............0330......',
+          '......0000............0000......',
+          '................................'
+        ],
+        truck: [
+          '..000000000000000000000000000000................',
+          '..034444444444444444444444444430................',
+          '..03333333333333333333333333333000000000........',
+          '..033233233333333233333333233330344444330.......',
+          '..03323323333333323333333323333030DDDD0330......',
+          '..03323323333333323333333323333030DDDDD0330.....',
+          '..03323323333333323333333323333030000000330.....',
+          '..03323323333333323333333323333033333333330.....',
+          '..033233233333333233333333233330330033333370....',
+          '..033300003333333333333333333330333300003470....',
+          '..033000000333333333333333333330333000000370....',
+          '.033300330033333333333333333330333003300330.....',
+          '.000003443000000000000000000000000034430000.....',
+          '......0330..........................0330........',
+          '......0000..........................0000........',
+          '................................................'
+        ],
+        sportsWreck: [
+          '....................FF..........',
+          '...................FFFF.........',
+          '.............E......FF..........',
+          '..000.......EE.....E............',
+          '..0C00....0E7E0...EE............',
+          '...0CC0000E77E000E7E..000.......',
+          '..0CCCCCC0E7700CC77E00CC0.......',
+          '.0CEEEECC0000CC0000CECC0C0......',
+          '.0CCCCCC0D00CC0CCCC0CCCCC070....',
+          '.0CCCC0000CCC00CCCCCCC0000770...',
+          '.0CCC000000CCCC0CCCCC000000C0...',
+          '.03CC003300CCCCCCCCCC003300030..',
+          '..00003443000000..000034430000..',
+          '..00..0330.....00.....0330......',
+          '.00...0000............0000..00..',
+          '................................'
+        ],
+        taxiWreck: [
+          '......................FF........',
+          '.....................FFFF.......',
+          '.........0000000......FF........',
+          '........074447770....E..........',
+          '.......070D0D00D0...EE..........',
+          '......070D00D0000..E7E..........',
+          '..000077000DD00D00EE7E..000.....',
+          '.0744477000000000E777E007770....',
+          '.0770707070E070700E77E00707770..',
+          '.077770000E7E077700000700007770.',
+          '.077700000077E0777777000000740..',
+          '.03770033000000077777003300030..',
+          '..00003443000..000000034430000..',
+          '..00..0330....00......0330......',
+          '.00...0000............0000..00..',
+          '................................'
+        ],
+        sedanWreck: [
+          '.......................FF.......',
+          '......................FFFF......',
+          '.........00000.........FF.......',
+          '........0D444D0000....E.........',
+          '.......0D0D0D00DD0...EE.........',
+          '......0D000DD00D0D0.E7E.........',
+          '..0000DD0D0DD0000D0EE7E000......',
+          '.0D444DD000000D00DE777EDDDD0....',
+          '.0DDDDDDD0DD00D0DDD77EDDDDDD70..',
+          '.0DDDD0000DD0DD0DDDDDD0000D470..',
+          '.0DDD000000DDD00DDDDD000000D70..',
+          '.03DD003300DDDD0DDDDD003300D30..',
+          '..00003443000000.0000034430000..',
+          '..00..0330......0.....0330......',
+          '.00...0000............0000..00..',
+          '................................'
+        ],
+        truckWreck: [
+          '..000000000000000000000000000000........FF......',
+          '..034444444444444444444444444430.......FFFF.....',
+          '..033333333333333333333333333330........FF......',
+          '..033200023333333233333333233330......E.........',
+          '..033230003333333233333333233330.....EE.........',
+          '..033233033333333233330033233330...EE7E.........',
+          '..033233233333333233300033233330..E777E.........',
+          '..0332332333333332333033332333300E77E00330......',
+          '..033233233330033233333333233330333003333370....',
+          '..033300003300033333333333333330330300003470....',
+          '..033000000330333333333333333330333000000370....',
+          '.033300330033333333333333333330333003300030.....',
+          '.000003443000000000000000000000000034430000.....',
+          '..00..0330.....................00...0330........',
+          '.00...0000....................00....0000..00....',
+          '................................................'
+        ],
+        frogSit: [
+          '................',
+          '....00....00....',
+          '...0AA0..0AA0...',
+          '...0440AA0440...',
+          '...040AAAA040...',
+          '..0BAAAAAAAAB0..',
+          '..0BAA0000AAB0..',
+          '.0BBAAAAAAAABB0.',
+          '0ABBAAAAAAAABBA0',
+          '0ABBAAAAAAAABBA0',
+          '0ABBAAAAAAAABBA0',
+          '.0BBAAAAAAAABB0.',
+          '.0BB0BAAAB0BB0..',
+          '.0AB0BA0AB0BA0..',
+          '.000.00000.000..',
+          '................'
+        ],
+        frogHop: [
+          '................',
+          '.........00.00..',
+          '........0AA0AA0.',
+          '.......0A440440.',
+          '......0AA40A400.',
+          '.00..0BAAAAAAA0.',
+          '0AA00BAAAAA0000.',
+          '.0AABAAAAAAAB0..',
+          '..0BAAAAAAAB0...',
+          '...0BAAAAAB0....',
+          '..0BBB00AB0.....',
+          '.0ABB0..0AB00...',
+          '0AAB0....0AAA0..',
+          '.000......000...',
+          '................',
+          '................'
+        ],
+        frogLand: [
+          '................',
+          '................',
+          '................',
+          '.....00...00....',
+          '....0AA0.0AA0...',
+          '...0A440A044A0..',
+          '..0AA40AAA04AA0.',
+          '.0BBAAAAAAAAAAB0',
+          '0ABBAAAA0000AAB0',
+          '0ABBAAAAAAAAAAB0',
+          '.0BBAAAAAAAAAB0.',
+          '.0BB0BAAAAB0BB0.',
+          '0AAB0BA00AB0BAA0',
+          '.000.000000.000.',
+          '................',
+          '................'
+        ],
+        frogCrouch: [
+          '................',
+          '......000.......',
+          '....00AAA0.00...',
+          '...0AAAAAA0AA0..',
+          '..0BAAAA440440..',
+          '.0BAAAAA40A400..',
+          '.0BAAAAAAAAAAA0.',
+          '.0BBAAAAAA00000.',
+          '.0BBAAAAAAAAAB0.',
+          '.0BBBAAAAAAAB0..',
+          '..0BBBBAAAAB0...',
+          '..0BB0BAAB0BB0..',
+          '.0AAB0BA0B0BAA0.',
+          '..000.0000.000..',
+          '................',
+          '................'
+        ],
+        fire0: ['....E.......', '....EE...E..', '..E.E7E..E..', '..EEE7E.EE..', '.EE777EEE7E.', '.E77777E77E.', '.E77777777E.', '..77777777..'],
+        fire1: ['.......E....', '..E...EE....', '..E..E7EE...', '.EE.E77EE.E.', '.E7EE777EEE.', '.E77E77777E.', '.E77777777E.', '..77777777..'],
+        smoke: ['...FFFF...', '..FFFF3F..', '.FFFFFF3F.', 'FFFF3FFFFF', 'FFFFFFFFFF', '.FFFFFFFF.', '..FFFFFF..', '...FFFF...'],
+        dust0: ['........', '.F....F.', 'FF.FF.FF', '.FFFFFF.'],
+        dust1: ['F......F', '..F..F..', '.F....F.', '........'],
+        dash: ['444444444444', '444444444444'],
+        tuft: ['...9....', '.9.9..9.', '.999.99.', '99999999']
+      };
+      const fontRows = {
+        A:'01110/10001/10001/11111/10001/10001/10001', B:'11110/10001/10001/11110/10001/10001/11110',
+        C:'01111/10000/10000/10000/10000/10000/01111', D:'11110/10001/10001/10001/10001/10001/11110',
+        E:'11111/10000/10000/11110/10000/10000/11111', F:'11111/10000/10000/11110/10000/10000/10000',
+        G:'01111/10000/10000/10111/10001/10001/01111', H:'10001/10001/10001/11111/10001/10001/10001',
+        I:'11111/00100/00100/00100/00100/00100/11111', J:'00111/00010/00010/00010/10010/10010/01100',
+        K:'10001/10010/10100/11000/10100/10010/10001', L:'10000/10000/10000/10000/10000/10000/11111',
+        M:'10001/11011/10101/10101/10001/10001/10001', N:'10001/11001/10101/10011/10001/10001/10001',
+        O:'01110/10001/10001/10001/10001/10001/01110', P:'11110/10001/10001/11110/10000/10000/10000',
+        Q:'01110/10001/10001/10001/10101/10010/01101', R:'11110/10001/10001/11110/10100/10010/10001',
+        S:'01111/10000/10000/01110/00001/00001/11110', T:'11111/00100/00100/00100/00100/00100/00100',
+        U:'10001/10001/10001/10001/10001/10001/01110', V:'10001/10001/10001/10001/10001/01010/00100',
+        W:'10001/10001/10001/10101/10101/10101/01010', X:'10001/10001/01010/00100/01010/10001/10001',
+        Y:'10001/10001/01010/00100/00100/00100/00100', Z:'11111/00001/00010/00100/01000/10000/11111',
+        '0':'01110/10001/10011/10101/11001/10001/01110', '1':'00100/01100/00100/00100/00100/00100/01110',
+        '2':'01110/10001/00001/00010/00100/01000/11111', '3':'11110/00001/00001/01110/00001/00001/11110',
+        '4':'00010/00110/01010/10010/11111/00010/00010', '5':'11111/10000/10000/11110/00001/00001/11110',
+        '6':'01110/10000/10000/11110/10001/10001/01110', '7':'11111/00001/00010/00100/01000/01000/01000',
+        '8':'01110/10001/10001/01110/10001/10001/01110', '9':'01110/10001/10001/01111/00001/00001/01110',
+        '+':'00000/00100/00100/11111/00100/00100/00000', '-':'00000/00000/00000/11111/00000/00000/00000',
+        x:'00000/00000/10001/01010/00100/01010/10001', '!':'00100/00100/00100/00100/00100/00000/00100',
+        '.':'00000/00000/00000/00000/00000/00110/00110', ':':'00000/00110/00110/00000/00110/00110/00000',
+        '/':'00001/00001/00010/00100/01000/10000/10000'
+      };
+      function raster(rows) {
+        const image = document.createElement('canvas');
+        image.width = rows[0].length; image.height = rows.length;
+        const paint = image.getContext('2d');
+        rows.forEach((row, y) => {
+          if (row.length !== image.width || /[^.0-9A-F]/.test(row)) throw new Error('Invalid pixel map');
+          for (let x = 0; x < row.length; x++) if (row[x] !== '.') {
+            paint.fillStyle = palette[parseInt(row[x], 16)];
+            paint.fillRect(x, y, 1, 1);
+          }
+        });
+        return image;
+      }
+      const sprites = {};
+      for (const [name, rows] of Object.entries(maps)) {
+        const image = raster(rows);
+        const mirror = document.createElement('canvas');
+        mirror.width = image.width; mirror.height = image.height;
+        const paint = mirror.getContext('2d');
+        paint.translate(image.width, 0); paint.scale(-1, 1); paint.drawImage(image, 0, 0);
+        sprites[name] = [image, mirror];
+      }
+      const glyphs = {};
+      for (const color of ['4', '7', 'A', 'E']) {
+        glyphs[color] = {};
+        for (const [letter, data] of Object.entries(fontRows)) glyphs[color][letter] = raster(data.split('/').map(row => row.replace(/0/g, '.').replace(/1/g, color)));
+      }
+      // Four opaque dither stages remove whole smoke pixels; never alpha blending.
+      const smokeStages = [0, 1, 2, 3].map(stage => raster(maps.smoke.map((row, y) => [...row].map((pixel, x) => (x + y * 3) % 4 < stage ? '.' : pixel).join(''))));
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+      const rowY = [48, 80, 112, 144, 176, 208, 232];
+      const kinds = ['sports', 'taxi', 'sedan', 'truck'];
+      let state = 'waiting', resumeState = 'playing', score = 0, best = 0, lives = 3, level = 1;
+      let cars = [], pads = [], effects = [], messages = [];
+      let chain = 1, comboTime = 0, crossingTime = 25, stateTime = 0, shake = 0;
+      let hop = null, queued = null, landing = 0, pointer = null;
+      let lastTime = 0, request = 0, scale = 1, offsetX = 0, offsetY = 0;
+      const frog = { col: 9, row: 6, x: 152, y: 232, left: false };
+      try {
+        const saved = Number(localStorage.getItem('site.crossing-carnage.best'));
+        if (Number.isSafeInteger(saved) && saved >= 0) best = saved;
+      } catch (_) { /* Storage may be unavailable on file URLs or in private mode. */ }
+
+      function announce(message) { messages.push(message); }
+      function updateHud() {
+        for (const [id, value] of Object.entries({ score, best, lives, level })) outputs[id].value = String(value);
+        pauseButton.textContent = state === 'paused' ? 'Resume' : 'Pause';
+        pauseButton.disabled = state !== 'playing' && state !== 'paused';
+        const row = frog.row === 6 ? 'verge' : frog.row === 0 ? 'home bank' : `lane ${frog.row}`;
+        const label = `Crossing Carnage. Frog column ${frog.col + 1} ${row}. Score ${score}. Lives ${lives}. Level ${level}. Multiplier x${chain}. Pads ${pads.filter(Boolean).length} of 5. ${state}.`;
+        if (canvas.getAttribute('aria-label') !== label) canvas.setAttribute('aria-label', label);
+        if (messages.length) { announcement.textContent = messages.join(' '); messages.length = 0; }
+      }
+      function setState(next) {
+        state = next; stateTime = 0; lastTime = 0;
+        updateHud(); schedule();
+      }
+      function respawn() {
+        frog.col = 9; frog.row = 6; frog.x = 152; frog.y = 232; frog.left = false;
+        hop = null; queued = null; crossingTime = 25; landing = 0;
+      }
+      function laneSpeed(lane) { return [64, 54, 44, 34, 26][lane] * (1 + 0.12 * (level - 1)); }
+      function gapSize() { return (90 + Math.random() * 110) / (1 + Math.min(1, 0.06 * (level - 1))); }
+      function makeCar(lane, x) {
+        const kind = kinds[Math.floor(Math.random() * kinds.length)];
+        const cruise = laneSpeed(lane) * (kind === 'truck' ? 0.78 : 0.92 + Math.random() * 0.16);
+        return { lane, home: lane, x, y: 80 + lane * 32, dir: lane % 2 ? -1 : 1, kind, w: sprites[kind][0].width, cruise, speed: cruise, wreck: 0, smoke: 0, swerve: null, cooldown: 0 };
+      }
+      function buildTraffic() {
+        cars = []; pads = Array(5).fill(false);
+        for (let lane = 0; lane < 5; lane++) {
+          let x = Math.random() * 90;
+          for (let n = 0; n < 3 + Math.min(2, Math.floor((level - 1) / 4)); n++) {
+            const car = makeCar(lane, lane % 2 ? W - x : x);
+            cars.push(car); x += car.w + gapSize();
+          }
+        }
+      }
+      function recycle(car) {
+        const next = makeCar(car.home, 0);
+        let edge = next.dir > 0 ? -next.w / 2 : W + next.w / 2;
+        for (const other of cars) if (other !== car && other.home === car.home && Math.abs(other.y - next.y) < 14) {
+          const behind = other.x - next.dir * ((other.w + next.w) / 2 + gapSize());
+          edge = next.dir > 0 ? Math.min(edge, behind) : Math.max(edge, behind);
+        }
+        next.x = edge; Object.assign(car, next);
+      }
+      function newGame() {
+        score = 0; lives = 3; level = 1; chain = 1; comboTime = 0;
+        effects = []; messages = []; shake = 0; pointer = null;
+        respawn(); buildTraffic();
+        announce('Bait a car to swerve, then hop clear. Fill all five homes.');
+        setState('waiting');
+      }
+      function launch() {
+        if (state === 'gameover') newGame();
+        if (state === 'waiting') setState('playing');
+      }
+      function togglePause() {
+        if (state === 'playing') { resumeState = state; pausedElapsed = stateTime; queued = null; setState('paused'); }
+        else if (state === 'paused') {
+          const elapsed = pausedElapsed;
+          setState(resumeState); stateTime = elapsed;
+        }
+      }
+      let pausedElapsed = 0;
+      function suspend() {
+        queued = null;
+        if (pointer && canvas.hasPointerCapture(pointer.id)) canvas.releasePointerCapture(pointer.id);
+        pointer = null;
+        if (['playing', 'dying', 'levelclear'].includes(state)) {
+          resumeState = state; pausedElapsed = stateTime; setState('paused');
+        }
+      }
+      function addPoints(value, x, y) {
+        score += value;
+        effects.push({ kind: 'score', x, y, value, elapsed: 0, duration: 0.8 });
+        if (score > best) {
+          best = score;
+          try { localStorage.setItem('site.crossing-carnage.best', String(best)); } catch (_) { /* Play without persistence. */ }
+        }
+      }
+      function dust(x, y) {
+        if (!motion.matches) effects.push({ kind: 'dust', x, y, elapsed: 0, duration: 0.16 });
+      }
+      function homeAt(col) {
+        const x = col * 16 + 8;
+        return pads.findIndex((_, i) => x - 8 >= 40 + i * 48 && x + 8 <= 64 + i * 48);
+      }
+      function finishHop() {
+        frog.col = hop.col; frog.row = hop.row; frog.x = hop.x; frog.y = hop.y;
+        hop = null; landing = motion.matches ? 0 : 0.1;
+        dust(frog.x, frog.y + 5);
+        if (frog.row === 0) {
+          const pad = homeAt(frog.col);
+          pads[pad] = true;
+          const gained = 250 * chain;
+          addPoints(gained, frog.x, 42);
+          announce(`Home ${pad + 1} filled. Plus ${gained} points. Pads ${pads.filter(Boolean).length} of 5.`);
+          respawn();
+          if (pads.every(Boolean)) {
+            announce(`Level ${level} clear. Score ${score}.`); setState('levelclear');
+          }
+        }
+        const direction = queued; queued = null;
+        if (direction && state === 'playing') move(direction);
+        updateHud();
+      }
+      function move(direction) {
+        if (state !== 'playing') return;
+        if (hop) { if (queued === null) queued = direction; return; }
+        const col = clamp(frog.col + (direction === 'right' ? 1 : direction === 'left' ? -1 : 0), 0, 19);
+        const row = clamp(frog.row + (direction === 'down' ? 1 : direction === 'up' ? -1 : 0), 0, 6);
+        if (col === frog.col && row === frog.row) return;
+        if (row === 0) {
+          const pad = homeAt(col);
+          if (pad < 0 || pads[pad]) return;
+        }
+        if (direction === 'left' || direction === 'right') frog.left = direction === 'left';
+        // The five road hops are 32px. The shallow bottom verge joins lane 5 in 24px.
+        hop = { fromX: frog.x, fromY: frog.y, x: col * 16 + 8, y: rowY[row], col, row, elapsed: 0 };
+        dust(frog.x, frog.y + 5);
+        if (motion.matches) finishHop();
+        schedule();
+      }
+      function die(reason) {
+        if (state !== 'playing') return;
+        hop = null; queued = null; chain = 1; comboTime = 0;
+        announce(`${reason}. Frog down. Life lost.`); setState('dying');
+      }
+      function frogHit(car) {
+        return Math.abs(car.x - frog.x) < car.w / 2 + 6 && Math.abs(car.y - frog.y) < 12;
+      }
+      function overlap(a, b) { return Math.abs(a.x - b.x) < (a.w + b.w) / 2 - 2 && Math.abs(a.y - b.y) < 13; }
+      function crash(a, b, side) {
+        if (a.wreck && b.wreck) return;
+        chain = comboTime > 0 ? Math.min(8, chain + 1) : 1;
+        comboTime = 2.5;
+        const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+        const gained = (side ? 150 : 100) * chain;
+        for (const car of [a, b]) if (!car.wreck) {
+          car.wreck = 3.5; car.speed = 0; car.swerve = null; car.smoke = 0;
+        }
+        addPoints(gained, x, y - 10);
+        announce(`${side ? 'Side impact' : 'Crash'}. Plus ${gained} points. Combo x${chain}.`);
+        if (!motion.matches) {
+          shake = 0.12;
+          effects.push({ kind: 'flash', x, y, frames: 2, elapsed: 0, duration: 0.12 });
+        }
+      }
+      function trySwerve(car) {
+        if (car.swerve || car.cooldown > 0 || Math.abs(frog.y - car.y) > 12) return;
+        const ahead = (frog.x - car.x) * car.dir - car.w / 2;
+        if (ahead < 6 || ahead > 56) return;
+        let target = -1, mostRoom = -Infinity;
+        for (const lane of [car.lane - 1, car.lane + 1]) {
+          if (lane < 0 || lane > 4) continue;
+          let room = W;
+          for (const other of cars) if (other !== car && Math.abs(other.y - (80 + lane * 32)) < 16) room = Math.min(room, Math.abs(other.x - car.x) - (other.w + car.w) / 2);
+          if (room > mostRoom || (room === mostRoom && Math.abs(lane - 2) < Math.abs(target - 2))) { mostRoom = room; target = lane; }
+        }
+        if (target !== -1) {
+          car.swerve = { from: car.y, to: 80 + target * 32, elapsed: 0 };
+          car.lane = target; car.cooldown = 1.2;
+        }
+      }
+      function updateTraffic(dt) {
+        // Detect a frog landing inside an existing box before a car can evade it.
+        for (const car of cars) if (frogHit(car)) { die('Hit by traffic'); return; }
+        for (const car of cars) {
+          if (car.wreck) {
+            car.wreck = Math.max(0, car.wreck - dt); car.smoke -= dt;
+            if (car.smoke <= 0) {
+              car.smoke += 0.25;
+              effects.push({ kind: 'smoke', x: car.x + 6 * car.dir, y: car.y - 12, elapsed: 0, duration: 0.9 });
+            }
+            if (car.wreck === 0) recycle(car);
+            continue;
+          }
+          car.cooldown = Math.max(0, car.cooldown - dt);
+          if (state === 'playing') trySwerve(car);
+          let braking = false;
+          const distance = car.speed * car.speed / 180 + 12;
+          for (const other of cars) if (other !== car && Math.abs(car.y - other.y) < 13) {
+            const gap = (other.x - car.x) * car.dir - (car.w + other.w) / 2;
+            const otherSpeed = other.wreck ? 0 : other.speed * other.dir * car.dir;
+            if (gap >= -2 && gap < distance && otherSpeed < car.speed) braking = true;
+          }
+          car.speed = braking ? Math.max(0, car.speed - 90 * dt) : Math.min(car.cruise, car.speed + 35 * dt);
+          car.x += car.dir * car.speed * dt;
+          if (car.swerve) {
+            car.swerve.elapsed += dt;
+            const t = Math.min(1, car.swerve.elapsed / 0.35);
+            car.y = car.swerve.from + (car.swerve.to - car.swerve.from) * t;
+            if (t === 1) car.swerve = null;
+          }
+          if ((car.dir > 0 && car.x - car.w / 2 > W) || (car.dir < 0 && car.x + car.w / 2 < 0)) recycle(car);
+        }
+        for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
+          const a = cars[i], b = cars[j];
+          if ((!a.wreck || !b.wreck) && overlap(a, b)) crash(a, b, !!(a.swerve || b.swerve) || a.dir !== b.dir);
+        }
+        if (state === 'playing') for (const car of cars) if (frogHit(car)) { die('Hit by traffic'); break; }
+      }
+      function update(dt) {
+        if (state === 'paused' || state === 'waiting' || state === 'gameover') return;
+        stateTime += dt; landing = Math.max(0, landing - dt); shake = Math.max(0, shake - dt);
+        if (comboTime > 0) { comboTime = Math.max(0, comboTime - dt); if (!comboTime) chain = 1; }
+        if (state === 'playing') {
+          crossingTime = Math.max(0, crossingTime - dt);
+          if (!crossingTime) die('Time out');
+          if (hop && state === 'playing') {
+            hop.elapsed += dt;
+            const t = Math.min(1, hop.elapsed / HOP);
+            frog.x = hop.fromX + (hop.x - hop.fromX) * t;
+            frog.y = hop.fromY + (hop.y - hop.fromY) * t;
+            if (t === 1) finishHop();
+          }
+          if (state === 'playing') updateTraffic(dt);
+        } else if (state === 'dying' && stateTime >= 0.55) {
+          lives--;
+          respawn();
+          if (!lives) { announce(`Game over. Score ${score}.`); setState('gameover'); }
+          else { announce(`${lives} ${lives === 1 ? 'life' : 'lives'} left.`); setState('playing'); }
+        } else if (state === 'levelclear' && stateTime >= 1.4) {
+          level++; effects = []; comboTime = 0; chain = 1;
+          respawn(); buildTraffic(); setState('playing');
+        }
+        for (let i = effects.length - 1; i >= 0; i--) {
+          effects[i].elapsed += dt;
+          if (effects[i].elapsed >= effects[i].duration) effects.splice(i, 1);
+        }
+        updateHud();
+      }
+      function box(x, y, w, h, color) { g.fillStyle = palette[color]; g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
+      function blit(name, x, y, left = false) { g.drawImage(sprites[name][left ? 1 : 0], Math.round(x), Math.round(y)); }
+      function text(value, x, y, color = '4', size = 1) {
+        for (const letter of String(value)) {
+          const image = glyphs[color][letter];
+          if (image) g.drawImage(image, Math.round(x), Math.round(y), 5 * size, 7 * size);
+          x += 6 * size;
+        }
+      }
+      function centered(value, y, color = '4', size = 1) { text(value, (W - (value.length * 6 - 1) * size) / 2, y, color, size); }
+      const background = document.createElement('canvas');
+      background.width = W; background.height = H;
+      function buildScenery() {
+        box(0, 0, W, 8, 5); box(0, 8, W, 8, 6); box(0, 16, W, 8, 7);
+        box(0, 24, W, 40, 8); box(0, 24, W, 4, 9);
+        box(0, 64, W, 160, 1); box(0, 224, W, 16, 8); box(0, 236, W, 4, 9);
+        for (let lane = 0; lane < 5; lane++) {
+          const y = 64 + lane * 32;
+          if (lane) for (let x = -4; x < W; x += 28) blit('dash', x, y - 1);
+          // Stepped cracks are part of the cached background, not per-frame pixels.
+          for (let n = 0; n < 3; n++) {
+            const x = (lane * 37 + n * 113 + 19) % W;
+            box(x, y + 7, 12, 1, 2); box(x + 11, y + 8, 1, 3, 2);
+            box(x + 12, y + 11, 9, 1, 2); box(x + 20, y + 12, 1, 3, 2);
+            box(x + 21, y + 15, 8, 1, 2);
+          }
+        }
+        for (const y of [61, 222]) {
+          box(0, y, W, 2, 3); box(0, y + 2, W, 1, 0);
+          for (let x = 12; x < W; x += 32) box(x, y, 2, 2, 4);
+        }
+        for (let x = 4; x < W; x += 23) { blit('tuft', x, 29 + x % 3); blit('tuft', x + 7, 235); }
+        background.getContext('2d').drawImage(scene, 0, 0);
+      }
+      function drawFrog() {
+        let pose = 'frogSit', y = frog.y - 8, height = 16;
+        if (state === 'dying') { pose = 'frogLand'; height = motion.matches ? 16 : 8; y = frog.y + 8 - height; }
+        else if (!motion.matches && hop) {
+          const t = clamp(hop.elapsed / HOP, 0, 1);
+          pose = t < 0.18 ? 'frogCrouch' : t > 0.82 ? 'frogLand' : 'frogHop';
+          const squash = t < 0.18 ? 1 + 0.12 * (t / 0.18) : t > 0.82 ? 1 - 0.14 * ((t - 0.82) / 0.18) : 1;
+          height = Math.round(16 * squash); y = frog.y + 8 - height - Math.sin(t * Math.PI) * 7;
+        } else if (landing && !motion.matches) { pose = 'frogLand'; height = 14; y = frog.y - 6; }
+        g.drawImage(sprites[pose][frog.left ? 1 : 0], Math.round(frog.x - 8), Math.round(y), 16, height);
+      }
+      function draw() {
+        g.imageSmoothingEnabled = false;
+        g.drawImage(background, 0, 0);
+        g.save();
+        if (shake && !motion.matches) g.translate(Math.floor(shake * 100) % 2 ? 2 : -2, 0);
+        for (let i = 0; i < 5; i++) {
+          box(40 + i * 48, 40, 24, 17, 9); box(42 + i * 48, 42, 20, 13, 0);
+          if (pads[i]) blit('frogSit', 44 + i * 48, 40);
+          else { box(47 + i * 48, 54, 10, 1, 8); text(String(i + 1), 49 + i * 48, 44, '7'); }
+        }
+        for (const car of cars) {
+          if (car.x + car.w / 2 < 0 || car.x - car.w / 2 > W) continue;
+          if (car.wreck > 0 && car.wreck < 0.4 && Math.floor(car.wreck * 20) % 2) continue;
+          blit(car.kind + (car.wreck ? 'Wreck' : ''), car.x - car.w / 2, car.y - 8, car.dir < 0);
+          if (car.wreck) blit(Math.floor(car.wreck * 8) % 2 ? 'fire0' : 'fire1', car.x - 3, car.y - 15);
+        }
+        drawFrog();
+        for (const effect of effects) {
+          const t = effect.elapsed / effect.duration;
+          if (effect.kind === 'smoke') {
+            g.drawImage(smokeStages[Math.min(3, Math.floor(t * 4))], Math.round(effect.x - 5 + t * 4), Math.round(effect.y - (motion.matches ? 0 : t * 18)));
+          } else if (effect.kind === 'dust' && !motion.matches) blit(t < 0.5 ? 'dust0' : 'dust1', effect.x - 4, effect.y);
+          else if (effect.kind === 'flash' && !motion.matches && effect.frames > 0) {
+            box(effect.x - 9, effect.y - 9, 18, 18, 4); effect.frames--;
+          } else if (effect.kind === 'score') {
+            const value = `+${effect.value}`, width = value.length * 6 + 4;
+            const x = clamp(effect.x - width / 2, 1, W - width - 1);
+            const y = Math.round(effect.y - (motion.matches ? 0 : effect.elapsed * 22));
+            box(x, y - 2, width, 11, 0); text(value, x + 3, y, '7');
+          }
+        }
+        g.restore();
+        box(4, 3, 89, 17, 0); text(`TIME ${Math.ceil(crossingTime)}`, 8, 5);
+        box(8, 15, 80, 2, 2); box(8, 15, 80 * crossingTime / 25, 2, crossingTime <= 5 ? 12 : 7);
+        box(256, 3, 60, 17, 0); text(`x${chain}`, 262, 5, '7');
+        box(261, 15, 49, 2, 2); box(261, 15, 49 * comboTime / 2.5, 2, 14);
+        if (state === 'waiting' || state === 'paused' || state === 'gameover' || state === 'levelclear') {
+          box(26, 104, 268, 55, 0); box(26, 104, 268, 2, 7);
+          const title = state === 'waiting' ? 'CROSSING CARNAGE' : state === 'paused' ? 'PAUSED' : state === 'gameover' ? 'GAME OVER' : `LEVEL ${level} CLEAR`;
+          centered(title, 113, '7', 2);
+          centered(state === 'levelclear' ? 'FIVE HOMES. NEXT HIGHWAY!' : state === 'paused' ? 'SPACE / ENTER TO RESUME' : 'SPACE / ENTER / TAP TO START', 139);
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = palette[0]; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(scene, offsetX, offsetY, W * scale, H * scale);
+      }
+      function schedule() { if (!request) request = requestAnimationFrame(frame); }
+      function frame(time) {
+        request = 0;
+        const dt = lastTime ? clamp((time - lastTime) / 1000, 0, 1 / 30) : 0;
+        lastTime = time;
+        update(dt); draw();
+        if (state === 'playing' || state === 'dying' || state === 'levelclear') schedule();
+      }
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(rect.height * ratio);
+        // Crisp pixels want a whole-number scale, but a fat letterbox is worse than a
+        // fractional one, so take the integer whenever it keeps ~88% of the available fit.
+        const fit = Math.min(canvas.width / W, canvas.height / H);
+        const whole = Math.max(1, Math.floor(fit));
+        scale = whole / fit >= 0.88 ? whole : fit;
+        offsetX = Math.floor((canvas.width - W * scale) / 2); offsetY = Math.floor((canvas.height - H * scale) / 2);
+        ctx.imageSmoothingEnabled = false; schedule();
+      }
+      canvas.addEventListener('pointerdown', event => {
+        if (pointer || !event.isPrimary || event.button !== 0) return;
+        pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        canvas.focus({ preventScroll: true }); canvas.setPointerCapture(event.pointerId);
+      });
+      canvas.addEventListener('pointerup', event => {
+        if (!pointer || event.pointerId !== pointer.id) return;
+        const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
+        pointer = null;
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        if (state === 'waiting' || state === 'gameover') { launch(); return; }
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) move('up');
+        else if (Math.abs(dx) > Math.abs(dy) * 1.2) move(dx > 0 ? 'right' : 'left');
+        else if (Math.abs(dy) > Math.abs(dx) * 1.2) move(dy > 0 ? 'down' : 'up');
+      });
+      canvas.addEventListener('pointercancel', () => { pointer = null; });
+      canvas.addEventListener('lostpointercapture', () => { pointer = null; });
+      window.addEventListener('keydown', event => {
+        if (![canvas, document.body, document].includes(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+        const directions = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right' };
+        if (!directions[key] && key !== ' ' && key !== 'Enter') return;
+        event.preventDefault(); canvas.focus({ preventScroll: true });
+        if (key === ' ' || key === 'Enter') {
+          if (event.repeat) return;
+          if (state === 'waiting' || state === 'gameover') launch();
+          else togglePause();
+        } else move(directions[key]);
+      });
+      pauseButton.addEventListener('click', togglePause);
+      document.getElementById('restart').addEventListener('click', () => { newGame(); canvas.focus({ preventScroll: true }); });
+      document.addEventListener('visibilitychange', () => { if (document.hidden) suspend(); });
+      window.addEventListener('blur', suspend);
+      canvas.addEventListener('blur', () => { queued = null; });
+      window.addEventListener('resize', resize);
+      theme.addEventListener('change', resize);
+      motion.addEventListener('change', () => {
+        if (motion.matches && hop) finishHop();
+        shake = 0; landing = 0;
+        effects = effects.filter(effect => effect.kind === 'score' || effect.kind === 'smoke');
+        schedule();
+      });
+      new ResizeObserver(resize).observe(canvas);
+      buildScenery(); resize(); newGame();
+    })();
+  </script>
+</body>
+</html>
