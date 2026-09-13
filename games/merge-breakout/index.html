@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Chip numbered tiles with a ball, merge rows with your paddle, and clear the board in Merge Breakout.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2316181D'/><text x='32' y='44' font-family='Georgia,serif' font-size='36' fill='%23FCFBF8' text-anchor='middle'>D</text></svg>">
+  <title>Merge Breakout &middot; David Clough</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #FCFBF8;
+      --surface: #FFFFFF;
+      --ink: #16181D;
+      --muted: #6B7280;
+      --line: rgba(22,24,29,0.10);
+      --accent: #B4451F;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14161A;
+        --surface: #1C1F24;
+        --ink: #EDEDEF;
+        --muted: #9AA1AC;
+        --line: rgba(237,237,239,0.14);
+        --accent: #E07A4F;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 24px; }
+    .top { display: flex; flex-direction: column; align-items: flex-start; gap: 24px; }
+    .back { color: var(--muted); text-decoration: none; }
+    .back:hover { color: var(--accent); }
+    h1 { margin: 0; font: 400 40px/1.1 Georgia, 'Iowan Old Style', 'Times New Roman', serif; }
+    .hint { margin: 16px 0 24px; color: var(--muted); font-size: 14px; }
+    .stage { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    canvas { display: block; width: 100%; max-width: 100%; aspect-ratio: 4 / 3; margin: auto; touch-action: none; }
+    canvas:focus-visible { outline-offset: -4px; }
+    .hud { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+    .stats { display: flex; gap: 24px; min-width: 0; }
+    .stat { color: var(--muted); font-size: 12px; min-width: 0; }
+    .stat output { display: block; color: var(--ink); font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 8px; }
+    button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { color: var(--muted); cursor: default; opacity: 0.6; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+    @media (max-width: 480px) {
+      .stats { width: 100%; justify-content: space-between; gap: 8px; }
+      .actions { width: 100%; }
+      button { flex: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="top"><a class="back" href="../../index.html">&#8592; All games</a><h1>Merge Breakout</h1></header>
+    <p class="hint">Move: pointer / arrows / A D. Launch: Space, Enter or tap. Pause: Space.</p>
+    <div class="stage"><canvas id="game" tabindex="0" aria-label="Merge Breakout. Press Space, Enter or tap to launch.">Merge Breakout requires a browser with canvas support.</canvas></div>
+    <div class="hud">
+      <div class="stats" aria-label="Game statistics">
+        <div class="stat">Score<output id="score">0</output></div>
+        <div class="stat">High<output id="best">0</output></div>
+        <div class="stat">Lives<output id="lives">3</output></div>
+        <div class="stat">Level<output id="level">1</output></div>
+      </div>
+      <div class="actions"><button id="pause" type="button" disabled>Pause</button><button id="restart" type="button">New game</button></div>
+    </div>
+    <span class="sr-only" role="status" aria-live="polite" id="announcement"></span>
+  </main>
+  <script>
+    (() => {
+      'use strict';
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const pauseButton = document.getElementById('pause');
+      const announcement = document.getElementById('announcement');
+      const outputs = Object.fromEntries(['score', 'best', 'lives', 'level'].map(id => [id, document.getElementById(id)]));
+      // All collision geometry is logical, independent of display size and slide animation.
+      const W = 800, H = 600, R = 8;
+      const COLS = 4, ROWS = 4, TILE_W = 176, TILE_H = 56, GAP = 6, LEFT = 39, TOP = 40;
+      const PADDLE_W = 130, PADDLE_H = 14, PADDLE_Y = 540;
+      const EPSILON = 0.000001, SEPARATION = 0.02;
+      const keys = new Set();
+      const theme = matchMedia('(prefers-color-scheme: dark)');
+      const motion = matchMedia('(prefers-reduced-motion: reduce)');
+      const tileStyles = new Map();
+      let colors, state = 'waiting', score = 0, best = 0, lives = 3, level = 1;
+      let board = [], tileHits = 0, clearElapsed = 0;
+      let paddleX = W / 2, targetX = W / 2, pointerMode = false, pointerId = null;
+      const ball = { x: W / 2, y: PADDLE_Y - R, vx: 0, vy: 0 };
+      let turn = null, effects = [];
+      const arrivals = new Map();
+      let lastTime = 0, request = 0;
+      try {
+        const saved = Number(localStorage.getItem('site.merge-breakout.best'));
+        if (Number.isSafeInteger(saved) && saved >= 0) best = saved;
+      } catch (_) { /* Storage may be unavailable on file URLs or in private mode. */ }
+
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+      const speed = () => Math.min(660, 340 * Math.pow(1.08, level - 1) * Math.pow(1.025, tileHits));
+      const cellX = index => LEFT + (index % COLS) * (TILE_W + GAP);
+      const cellY = index => TOP + Math.floor(index / COLS) * (TILE_H + GAP);
+
+      function updateHud() {
+        for (const [id, value] of Object.entries({ score, best, lives, level })) outputs[id].value = String(value);
+        pauseButton.textContent = state === 'paused' ? 'Resume' : 'Pause';
+        pauseButton.disabled = state !== 'playing' && state !== 'paused';
+        const rows = Array.from({ length: ROWS }, (_, row) => `Row ${row + 1}: ${board.slice(row * COLS, (row + 1) * COLS).map(value => value || 'empty').join(', ')}.`);
+        canvas.setAttribute('aria-label', `Merge Breakout. ${rows.join(' ')} Level ${level}. Score ${score}. Lives ${lives}. ${state}. Paddle left half slides left; right half slides right. Move with pointer, arrows or A D. Space or Enter launches; Space pauses.`);
+      }
+
+      function setState(next) {
+        state = next;
+        lastTime = 0;
+        updateHud();
+        schedule();
+      }
+
+      // Pure 2048 row move: traverse from the destination edge and consume pairs together.
+      function slideRow(row, direction) {
+        const indices = direction === 'left' ? [0, 1, 2, 3] : [3, 2, 1, 0];
+        const occupied = indices.filter(index => row[index] !== 0);
+        const cells = [0, 0, 0, 0], moves = [], merged = [];
+        let destination = 0;
+        for (let source = 0; source < occupied.length; source++) {
+          const from = occupied[source], to = indices[destination++], value = row[from];
+          moves.push({ from, to, value });
+          if (source + 1 < occupied.length && value === row[occupied[source + 1]]) {
+            moves.push({ from: occupied[++source], to, value });
+            cells[to] = value * 2;
+            merged.push(to);
+          } else cells[to] = value;
+        }
+        return { cells, moves, merged, changed: cells.some((value, index) => value !== row[index]) };
+      }
+
+      function slideGrid(direction) {
+        const cells = [], moves = [], merged = [];
+        let changed = false;
+        for (let row = 0; row < ROWS; row++) {
+          const offset = row * COLS;
+          const result = slideRow(board.slice(offset, offset + COLS), direction);
+          cells.push(...result.cells);
+          changed ||= result.changed;
+          for (const move of result.moves) moves.push({ from: move.from + offset, to: move.to + offset, value: move.value });
+          for (const index of result.merged) merged.push(index + offset);
+        }
+        if (!changed) return;
+        board = cells;
+        arrivals.clear();
+        turn = motion.matches ? null : { moves, merged, elapsed: 0 };
+        separateBall();
+        if (merged.length) announcement.textContent = `Merged ${merged.length} ${merged.length === 1 ? 'pair' : 'pairs'} ${direction}: ${merged.map(index => board[index]).join(', ')}. Score ${score}.`;
+        updateHud();
+      }
+
+      // Correct overlaps along the shallower axis. Extend across touching expanded cells,
+      // rather than ping-ponging inside the six-unit gaps, which are narrower than the ball.
+      function separateBall() {
+        for (let pass = 0; pass < COLS * ROWS; pass++) {
+          const index = board.findIndex((value, i) => value && ball.x > cellX(i) - R + EPSILON && ball.x < cellX(i) + TILE_W + R - EPSILON && ball.y > cellY(i) - R + EPSILON && ball.y < cellY(i) + TILE_H + R - EPSILON);
+          if (index < 0) return;
+          const dx = ball.x - (cellX(index) + TILE_W / 2), dy = ball.y - (cellY(index) + TILE_H / 2);
+          const horizontal = TILE_W / 2 + R - Math.abs(dx) < TILE_H / 2 + R - Math.abs(dy);
+          const sign = (horizontal ? dx : dy) < 0 ? -1 : 1;
+          let edge = horizontal ? cellX(index) + (sign < 0 ? -R : TILE_W + R) : cellY(index) + (sign < 0 ? -R : TILE_H + R);
+          for (let scan = 0; scan < COLS * ROWS; scan++) {
+            let extended = false;
+            for (let i = 0; i < board.length; i++) {
+              if (!board[i]) continue;
+              const near = horizontal ? cellX(i) - R : cellY(i) - R;
+              const far = horizontal ? cellX(i) + TILE_W + R : cellY(i) + TILE_H + R;
+              const cross = horizontal ? ball.y : ball.x;
+              const crossNear = horizontal ? cellY(i) - R : cellX(i) - R;
+              const crossFar = horizontal ? cellY(i) + TILE_H + R : cellX(i) + TILE_W + R;
+              if (cross > crossNear && cross < crossFar && edge > near && edge < far) {
+                edge = sign < 0 ? near : far;
+                extended = true;
+              }
+            }
+            if (!extended) break;
+          }
+          // A new half may occupy the reflected path. Leave its escape face outward,
+          // rather than immediately counting a second hit on the just-created tile.
+          if (horizontal) {
+            ball.x = edge + sign * SEPARATION;
+            ball.vx = sign * Math.abs(ball.vx);
+          } else {
+            ball.y = edge + sign * SEPARATION;
+            ball.vy = sign * Math.abs(ball.vy);
+          }
+        }
+      }
+
+      function buildGrid() {
+        board = Array.from({ length: COLS * ROWS }, () => Math.pow(2, level + (Math.random() < 0.5 ? 0 : 1)));
+        if (!board.some((value, index) => index % COLS < COLS - 1 && value === board[index + 1])) board[1] = board[0];
+        tileHits = 0;
+        turn = null;
+        arrivals.clear();
+        separateBall();
+      }
+
+      function dockBall() {
+        ball.x = paddleX;
+        ball.y = PADDLE_Y - R - SEPARATION;
+        ball.vx = ball.vy = 0;
+      }
+
+      function newGame() {
+        score = 0;
+        lives = 3;
+        level = 1;
+        paddleX = targetX = W / 2;
+        pointerMode = false;
+        keys.clear();
+        effects = [];
+        clearElapsed = 0;
+        dockBall();
+        buildGrid();
+        announcement.textContent = 'Break a tile and it splits in two. Paddle contacts merge rows.';
+        setState('waiting');
+      }
+
+      function launch() {
+        if (state === 'gameover') newGame();
+        if (state !== 'waiting') return;
+        const angle = (Math.random() * 70 - 35) * Math.PI / 180;
+        ball.vx = Math.sin(angle) * speed();
+        ball.vy = -Math.cos(angle) * speed();
+        setState('playing');
+      }
+
+      function togglePause() {
+        if (state === 'playing') {
+          keys.clear();
+          setState('paused');
+        } else if (state === 'paused') setState('playing');
+      }
+
+      function suspend() {
+        keys.clear();
+        if (pointerId !== null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+        pointerId = null;
+        if (state === 'playing') setState('paused');
+      }
+
+      function loseLife() {
+        lives--;
+        dockBall();
+        if (!lives) announcement.textContent = `Game over. Score ${score}.`;
+        setState(lives ? 'waiting' : 'gameover');
+      }
+
+      function clearLevel() {
+        clearElapsed = 0;
+        dockBall();
+        announcement.textContent = `Level ${level} cleared. Score ${score}. Level ${level + 1} is next.`;
+        setState('levelclear');
+      }
+
+      function nextLevel() {
+        level++;
+        dockBall();
+        buildGrid();
+        setState('waiting');
+      }
+
+      function tileStyle(value) {
+        if (!tileStyles.has(value)) {
+          const tier = Math.min(11, Math.log2(value));
+          const inkPercent = Math.min(88, 20 + (tier - 1) * 6.8);
+          // Mix sRGB channels directly so canvas fills match 2048's color-mix scale.
+          const mix = colors.inkRGB.map((channel, i) => Math.round(channel * inkPercent / 100 + colors.surfaceRGB[i] * (1 - inkPercent / 100)));
+          tileStyles.set(value, { fill: `rgb(${mix.join(',')})`, text: inkPercent >= 50 ? colors.surface : colors.ink });
+        }
+        return tileStyles.get(value);
+      }
+
+      // Contacted originals are removed together before any halves are placed.
+      function destroyTile(index, value) {
+        const gained = value === 2 ? 2 : value / 2;
+        score += gained;
+        tileHits++;
+        const x = cellX(index) + TILE_W / 2, y = cellY(index) + TILE_H / 2;
+        effects.push({ kind: 'score', x, y, value: gained, elapsed: 0, duration: 0.5 });
+        if (!motion.matches) {
+          effects.push({ kind: 'hit', x: cellX(index), y: cellY(index), value, elapsed: 0, duration: 0.12 });
+          const fill = tileStyle(value).fill;
+          for (let i = 0; i < 7; i++) {
+            const angle = i / 7 * Math.PI * 2;
+            effects.push({ kind: 'burst', x, y, vx: Math.cos(angle) * 85, vy: Math.sin(angle) * 65, fill, elapsed: 0, duration: 0.3 });
+          }
+        }
+        if (value >= 4) {
+          const row = Math.floor(index / COLS), col = index % COLS;
+          const preferred = [];
+          if (row < ROWS - 1) {
+            preferred.push(index + COLS);
+            if (col > 0) preferred.push(index + COLS - 1);
+            if (col < COLS - 1) preferred.push(index + COLS + 1);
+          }
+          let placed = 0;
+          if (col > 0) preferred.push(index - 1);
+          if (col < COLS - 1) preferred.push(index + 1);
+          for (let half = 0; half < 2; half++) {
+            let destination = preferred.find(cell => board[cell] === 0);
+            if (destination === undefined) destination = board.indexOf(0);
+            if (destination === -1) continue;
+            board[destination] = gained;
+            placed++;
+            if (!motion.matches) arrivals.set(destination, { x: cellX(index), y: cellY(index), elapsed: 0 });
+          }
+          announcement.textContent = `Split ${value} into ${placed} ${placed === 1 ? 'tile' : 'tiles'} of ${gained}.${placed < 2 ? ' No room for the other half.' : ''} Score ${score}.`;
+        }
+        if (score > best) {
+          best = score;
+          try { localStorage.setItem('site.merge-breakout.best', String(best)); } catch (_) { /* Play without persistence. */ }
+        }
+        separateBall();
+        updateHud();
+      }
+
+      function normalizeVelocity() {
+        const angle = Math.atan2(Math.abs(ball.vx), Math.abs(ball.vy));
+        const safeAngle = Math.min(angle, Math.PI / 3);
+        ball.vx = Math.sign(ball.vx) * Math.sin(safeAngle) * speed();
+        ball.vy = (ball.vy < 0 ? -1 : 1) * Math.cos(safeAngle) * speed();
+      }
+
+      // Swept point against a radius-expanded logical tile, using slab entry/exit times.
+      function tileImpact(index, duration) {
+        const left = cellX(index) - R, right = cellX(index) + TILE_W + R;
+        const top = cellY(index) - R, bottom = cellY(index) + TILE_H + R;
+        let nearX = -Infinity, farX = Infinity, nearY = -Infinity, farY = Infinity;
+        if (Math.abs(ball.vx) < EPSILON) {
+          if (ball.x <= left || ball.x >= right) return null;
+        } else {
+          const a = (left - ball.x) / ball.vx, b = (right - ball.x) / ball.vx;
+          nearX = Math.min(a, b);
+          farX = Math.max(a, b);
+        }
+        if (Math.abs(ball.vy) < EPSILON) {
+          if (ball.y <= top || ball.y >= bottom) return null;
+        } else {
+          const a = (top - ball.y) / ball.vy, b = (bottom - ball.y) / ball.vy;
+          nearY = Math.min(a, b);
+          farY = Math.max(a, b);
+        }
+        const enter = Math.max(nearX, nearY), exit = Math.min(farX, farY);
+        if (enter < -EPSILON || enter > exit || enter > duration || exit < 0) return null;
+        return { time: Math.max(0, enter), nx: nearX >= nearY - EPSILON ? -Math.sign(ball.vx) : 0, ny: nearY >= nearX - EPSILON ? -Math.sign(ball.vy) : 0, index };
+      }
+
+      function moveBall(duration) {
+        for (let iteration = 0; duration > EPSILON && iteration < 12; iteration++) {
+          let soonest = duration + 1;
+          let hits = [];
+          const offer = hit => {
+            if (!hit || hit.time < -EPSILON || hit.time > duration) return;
+            hit.time = Math.max(0, hit.time);
+            if (hit.time < soonest - EPSILON) { soonest = hit.time; hits = [hit]; }
+            else if (Math.abs(hit.time - soonest) <= EPSILON) hits.push(hit);
+          };
+          if (ball.vx < 0) offer({ time: (R - ball.x) / ball.vx, nx: 1, ny: 0 });
+          if (ball.vx > 0) offer({ time: (W - R - ball.x) / ball.vx, nx: -1, ny: 0 });
+          if (ball.vy < 0) offer({ time: (R - ball.y) / ball.vy, nx: 0, ny: 1 });
+          if (ball.vy > 0) {
+            const time = (PADDLE_Y - R - ball.y) / ball.vy;
+            const x = ball.x + ball.vx * time;
+            if (time >= -EPSILON && x >= paddleX - PADDLE_W / 2 - R && x <= paddleX + PADDLE_W / 2 + R) offer({ time, nx: 0, ny: -1, paddle: true });
+            offer({ time: (H + R - ball.y) / ball.vy, nx: 0, ny: 0, lost: true });
+          }
+          for (let index = 0; index < board.length; index++) if (board[index]) offer(tileImpact(index, duration));
+          if (!hits.length) {
+            ball.x += ball.vx * duration;
+            ball.y += ball.vy * duration;
+            break;
+          }
+          ball.x += ball.vx * soonest;
+          ball.y += ball.vy * soonest;
+          duration -= soonest;
+          if (hits.some(hit => hit.lost)) { loseLife(); return; }
+          let nx = 0, ny = 0;
+          // Snapshot simultaneous contacts before splitting, so a new half cannot be hit
+          // as though it were an original tile in the same contact batch.
+          for (const hit of hits) {
+            if (hit.nx) nx = hit.nx;
+            if (hit.ny) ny = hit.ny;
+            if (hit.index === undefined) continue;
+            hit.value = board[hit.index];
+            board[hit.index] = 0;
+            arrivals.delete(hit.index);
+            turn = null;
+          }
+          if (!hits.some(hit => hit.paddle)) {
+            if (nx) ball.vx = -ball.vx;
+            if (ny) ball.vy = -ball.vy;
+          }
+          for (const hit of hits) {
+            if (hit.index !== undefined) destroyTile(hit.index, hit.value);
+          }
+          if (!board.some(Boolean)) { clearLevel(); return; }
+          if (hits.some(hit => hit.paddle)) {
+            const offset = clamp((ball.x - paddleX) / (PADDLE_W / 2), -1, 1);
+            const sign = offset < 0 ? -1 : offset > 0 ? 1 : ball.vx > 0 ? 1 : -1;
+            // Slight steering avoids a dead-centre vertical loop, while preserving the chosen side.
+            const steer = sign * Math.max(0.05, Math.abs(offset));
+            const angle = steer * Math.PI / 3;
+            slideGrid(sign < 0 ? 'left' : 'right');
+            ball.vx = Math.sin(angle) * speed();
+            ball.vy = -Math.cos(angle) * speed();
+          }
+          normalizeVelocity();
+          ball.x += nx * SEPARATION;
+          ball.y += ny * SEPARATION;
+          separateBall();
+        }
+      }
+
+      function update(dt) {
+        if (state === 'waiting' || state === 'playing') {
+          const direction = Number(keys.has('ArrowRight') || keys.has('d')) - Number(keys.has('ArrowLeft') || keys.has('a'));
+          if (direction) {
+            paddleX += direction * 520 * dt;
+            targetX = paddleX;
+          } else if (pointerMode) {
+            paddleX += (targetX - paddleX) * (1 - Math.exp(-20 * dt));
+            if (Math.abs(targetX - paddleX) < 0.05) paddleX = targetX;
+          }
+          paddleX = clamp(paddleX, PADDLE_W / 2, W - PADDLE_W / 2);
+          targetX = clamp(targetX, PADDLE_W / 2, W - PADDLE_W / 2);
+          if (state === 'waiting') dockBall();
+          else moveBall(dt);
+        } else if (state === 'levelclear') {
+          clearElapsed += dt;
+          if (clearElapsed >= 0.6) nextLevel();
+        }
+        if (state === 'paused') return;
+        if (turn) {
+          turn.elapsed += dt;
+          if (turn.elapsed >= 0.24) turn = null;
+        }
+        for (const [index, arrival] of arrivals) {
+          arrival.elapsed += dt;
+          if (arrival.elapsed >= 0.1) arrivals.delete(index);
+        }
+        for (let i = effects.length - 1; i >= 0; i--) {
+          effects[i].elapsed += dt;
+          if (effects[i].elapsed >= effects[i].duration) effects.splice(i, 1);
+        }
+      }
+
+      function roundedRect(x, y, width, height, radius) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, width, height, radius);
+        ctx.fill();
+      }
+
+      function drawTile(value, x, y, scale = 1, flash = -1) {
+        const style = tileStyle(value);
+        ctx.save();
+        ctx.translate(x + TILE_W / 2, y + TILE_H / 2);
+        if (flash >= 0 && !motion.matches) ctx.translate(Math.sin(flash / 0.12 * Math.PI * 4) * 2, 0);
+        ctx.scale(scale, scale);
+        ctx.fillStyle = style.fill;
+        roundedRect(-TILE_W / 2, -TILE_H / 2, TILE_W, TILE_H, 8);
+        if (flash >= 0) {
+          ctx.save();
+          ctx.globalAlpha *= 0.25 * (1 - flash / 0.12);
+          ctx.fillStyle = colors.surface;
+          roundedRect(-TILE_W / 2, -TILE_H / 2, TILE_W, TILE_H, 8);
+          ctx.restore();
+        }
+        ctx.fillStyle = style.text;
+        const digits = String(value).length;
+        ctx.font = `600 ${Math.min(28, 144 / (digits * 0.65))}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+        ctx.fillText(String(value), 0, 1, TILE_W - 24);
+        ctx.restore();
+      }
+
+      function draw() {
+        ctx.fillStyle = colors.surface;
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = colors.line;
+        for (let index = 0; index < COLS * ROWS; index++) roundedRect(cellX(index), cellY(index), TILE_W, TILE_H, 8);
+        if (turn && turn.elapsed < 0.12 && !motion.matches) {
+          // Cosmetic movement only. The board has already settled for collision purposes.
+          const progress = turn.elapsed / 0.12;
+          for (const move of turn.moves) drawTile(move.value, cellX(move.from) + (cellX(move.to) - cellX(move.from)) * progress, cellY(move.to));
+        } else {
+          for (let index = 0; index < board.length; index++) {
+            if (!board[index]) continue;
+            const pop = turn && !motion.matches && turn.merged.includes(index) ? 1 + 0.08 * Math.sin(clamp((turn.elapsed - 0.12) / 0.12, 0, 1) * Math.PI) : 1;
+            const arrival = arrivals.get(index);
+            if (arrival && !motion.matches) {
+              const progress = clamp(arrival.elapsed / 0.1, 0, 1);
+              ctx.globalAlpha = progress;
+              drawTile(board[index], arrival.x + (cellX(index) - arrival.x) * progress, arrival.y + (cellY(index) - arrival.y) * progress, 0.94 + 0.06 * progress);
+              ctx.globalAlpha = 1;
+            } else drawTile(board[index], cellX(index), cellY(index), pop);
+          }
+        }
+        for (const effect of effects) {
+          ctx.globalAlpha = 1 - effect.elapsed / effect.duration;
+          if (effect.kind === 'score') {
+            ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+            const y = effect.y - (motion.matches ? 0 : effect.elapsed * 48);
+            const text = `+${effect.value}`;
+            ctx.fillStyle = colors.surface;
+            const width = ctx.measureText(text).width + 16;
+            roundedRect(effect.x - width / 2, y - 15, width, 30, 8);
+            ctx.fillStyle = colors.accent;
+            ctx.fillText(text, effect.x, y);
+          } else if (effect.kind === 'hit' && !motion.matches) {
+            drawTile(effect.value, effect.x, effect.y, 1, effect.elapsed);
+          } else if (!motion.matches) {
+            ctx.fillStyle = effect.fill;
+            ctx.fillRect(effect.x + effect.vx * effect.elapsed - 3, effect.y + effect.vy * effect.elapsed - 3, 6, 6);
+          }
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = colors.ink;
+        roundedRect(paddleX - PADDLE_W / 2, PADDLE_Y, PADDLE_W, PADDLE_H, 7);
+        ctx.fillStyle = colors.accent;
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, R, 0, Math.PI * 2);
+        ctx.fill();
+        if (state !== 'playing') {
+          const message = state === 'paused' ? 'Paused - press Space to resume' : state === 'gameover' ? 'Game over - press Space' : state === 'levelclear' ? `Level ${level} clear` : `Level ${level} - press Space`;
+          ctx.fillStyle = colors.surface;
+          roundedRect(128, 352, 544, 64, 12);
+          ctx.strokeStyle = colors.line;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = colors.ink;
+          ctx.font = '24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+          ctx.fillText(message, W / 2, 384, 512);
+        }
+      }
+
+      function schedule() {
+        if (!request) request = requestAnimationFrame(frame);
+      }
+
+      function frame(time) {
+        request = 0;
+        const dt = lastTime ? clamp((time - lastTime) / 1000, 0, 1 / 30) : 0;
+        lastTime = time;
+        update(dt);
+        draw();
+        if (state === 'playing' || state === 'levelclear' || (state !== 'paused' && (effects.length || arrivals.size || turn)) || (state === 'waiting' && (keys.size || Math.abs(targetX - paddleX) > 0.05))) schedule();
+      }
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(rect.width * ratio);
+        canvas.height = Math.round(rect.height * ratio);
+        ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+        const style = getComputedStyle(document.documentElement);
+        colors = Object.fromEntries(['surface', 'ink', 'line', 'accent'].map(name => [name, style.getPropertyValue('--' + name).trim()]));
+        colors.inkRGB = colors.ink.match(/[a-f\d]{2}/gi).map(channel => parseInt(channel, 16));
+        colors.surfaceRGB = colors.surface.match(/[a-f\d]{2}/gi).map(channel => parseInt(channel, 16));
+        tileStyles.clear();
+        schedule();
+      }
+
+      function point(event) {
+        const rect = canvas.getBoundingClientRect();
+        targetX = clamp((event.clientX - rect.left) / rect.width * W, PADDLE_W / 2, W - PADDLE_W / 2);
+        pointerMode = true;
+        keys.clear();
+        schedule();
+      }
+
+      canvas.addEventListener('pointerdown', event => {
+        if (pointerId !== null || !event.isPrimary || event.button !== 0) return;
+        pointerId = event.pointerId;
+        canvas.focus({ preventScroll: true });
+        canvas.setPointerCapture(event.pointerId);
+        point(event);
+      });
+      canvas.addEventListener('pointermove', event => {
+        if (event.pointerType === 'mouse' || event.pointerId === pointerId) point(event);
+      });
+      canvas.addEventListener('pointerup', event => {
+        if (event.pointerId !== pointerId) return;
+        pointerId = null;
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        if (state === 'waiting' || state === 'gameover') launch();
+      });
+      canvas.addEventListener('pointercancel', () => { pointerId = null; });
+      canvas.addEventListener('lostpointercapture', () => { pointerId = null; });
+      window.addEventListener('keydown', event => {
+        if (event.target !== canvas && event.target !== document.body) return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+        if (!['ArrowLeft', 'ArrowRight', 'a', 'd', ' ', 'Enter'].includes(key)) return;
+        event.preventDefault();
+        canvas.focus({ preventScroll: true });
+        if (key === ' ' || key === 'Enter') {
+          if (event.repeat) return;
+          if (state === 'waiting' || state === 'gameover') launch();
+          else if (key === ' ') togglePause();
+        } else {
+          pointerMode = false;
+          targetX = paddleX;
+          keys.add(key);
+          schedule();
+        }
+      });
+      window.addEventListener('keyup', event => { keys.delete(event.key.length === 1 ? event.key.toLowerCase() : event.key); });
+      pauseButton.addEventListener('click', togglePause);
+      document.getElementById('restart').addEventListener('click', () => { newGame(); canvas.focus({ preventScroll: true }); });
+      document.addEventListener('visibilitychange', () => { if (document.hidden) suspend(); });
+      window.addEventListener('blur', suspend);
+      canvas.addEventListener('blur', () => { keys.clear(); });
+      window.addEventListener('resize', resize);
+      theme.addEventListener('change', resize);
+      motion.addEventListener('change', () => {
+        turn = null;
+        arrivals.clear();
+        effects = effects.filter(effect => effect.kind === 'score');
+        schedule();
+      });
+      new ResizeObserver(resize).observe(canvas);
+      resize();
+      newGame();
+    })();
+  </script>
+</body>
+</html>
